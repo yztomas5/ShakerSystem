@@ -1,0 +1,423 @@
+-- Script: ShakerPersistence.lua
+-- Ubicación: ServerScriptService
+-- Sistema de persistencia usando ProfileStore
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Importar ProfileStore
+local ProfileStore = require(ReplicatedStorage.Modules.Data.ProfileStore)
+
+-- Template de datos por defecto
+local PROFILE_TEMPLATE = {
+	ShakerContents = {},
+	ActiveShakes = {},
+	SaveTime = 0
+}
+
+-- Inicializar ProfileStore para Shakers
+local ShakerStore = ProfileStore.New("ShakerData_v2", PROFILE_TEMPLATE)
+local Profiles = {} -- {[Player] = Profile}
+
+local ShakerPersistence = {}
+
+-- Referencias a dependencias
+local ShakerManager = nil
+local ShakerJuice = nil
+local ShakerEffects = nil
+local ShakerModel = nil
+local IngredientConfig = nil
+local MutationConfig = nil
+
+-- Inicializar dependencias
+local function InitializeDependencies()
+	if ShakerManager then return end
+
+	local ShakerLogic = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Utils"):WaitForChild("ShakerLogic")
+	ShakerManager = require(ShakerLogic:WaitForChild("ShakerManager"))
+	ShakerJuice = require(ShakerLogic:WaitForChild("ShakerJuice"))
+	ShakerEffects = require(ShakerLogic:WaitForChild("ShakerEffects"))
+	ShakerModel = require(ShakerLogic:WaitForChild("ShakerModel"))
+
+	IngredientConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"):WaitForChild("IngredientConfig"))
+	MutationConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"):WaitForChild("MutationConfig"))
+end
+
+-- ============================================================
+-- SERIALIZACIÓN / DESERIALIZACIÓN
+-- ============================================================
+
+local function SerializeValue(instance)
+	return {
+		ClassName = instance.ClassName,
+		Name = instance.Name,
+		Value = instance.Value
+	}
+end
+
+local function SerializeFolder(folder)
+	local data = {
+		ClassName = "Folder",
+		Name = folder.Name,
+		Contents = {}
+	}
+
+	for _, child in ipairs(folder:GetChildren()) do
+		if child:IsA("Folder") then
+			table.insert(data.Contents, SerializeFolder(child))
+		elseif child:IsA("ValueBase") then
+			table.insert(data.Contents, SerializeValue(child))
+		end
+	end
+
+	return data
+end
+
+local function DeserializeValue(data, parent)
+	local instance = Instance.new(data.ClassName)
+	instance.Name = data.Name
+	if data.Value ~= nil then
+		instance.Value = data.Value
+	end
+	instance.Parent = parent
+	return instance
+end
+
+local function DeserializeFolder(data, parent)
+	local folder = Instance.new("Folder")
+	folder.Name = data.Name
+	folder.Parent = parent
+
+	if data.Contents then
+		for _, childData in ipairs(data.Contents) do
+			if childData.ClassName == "Folder" then
+				DeserializeFolder(childData, folder)
+			else
+				DeserializeValue(childData, folder)
+			end
+		end
+	end
+
+	return folder
+end
+
+-- ============================================================
+-- ACTUALIZAR DATOS EN EL PROFILE
+-- ============================================================
+
+function ShakerPersistence.UpdatePlayerData(player)
+	local profile = Profiles[player]
+	if not profile or not profile:IsActive() then
+		warn("⚠️ No active profile for " .. player.Name)
+		return
+	end
+
+	local playerShakers = player:FindFirstChild("Shakers")
+	if not playerShakers then return end
+
+	-- Limpiar datos antiguos
+	profile.Data.ShakerContents = {}
+	profile.Data.ActiveShakes = {}
+	profile.Data.SaveTime = os.time()
+
+	-- Serializar contenido de shakers
+	for _, shakerFolder in ipairs(playerShakers:GetChildren()) do
+		if shakerFolder:IsA("Folder") then
+			local shakerNumber = tonumber(shakerFolder.Name)
+			if shakerNumber then
+				profile.Data.ShakerContents[tostring(shakerNumber)] = {}
+
+				for _, child in ipairs(shakerFolder:GetChildren()) do
+					if child:IsA("Folder") then
+						table.insert(profile.Data.ShakerContents[tostring(shakerNumber)], SerializeFolder(child))
+					elseif child:IsA("ValueBase") then
+						table.insert(profile.Data.ShakerContents[tostring(shakerNumber)], SerializeValue(child))
+					end
+				end
+			end
+		end
+	end
+
+	-- Guardar mezclas activas
+	if ShakerManager then
+		for shakeKey, shakeData in pairs(ShakerManager.ActiveShakes) do
+			if shakeData.player == player then
+				local elapsed = tick() - shakeData.startTime
+				local remaining = math.max(0, shakeData.duration - elapsed)
+
+				if remaining > 0 then
+					profile.Data.ActiveShakes[tostring(shakeData.shakerNumber)] = {
+						TimeRemaining = remaining,
+						TotalDuration = shakeData.duration,
+						MixedColor = {shakeData.mixedColor.R, shakeData.mixedColor.G, shakeData.mixedColor.B}
+					}
+				end
+			end
+		end
+	end
+
+	print("💾 Updated profile data for " .. player.Name)
+end
+
+-- ============================================================
+-- CARGAR DATOS DESDE EL PROFILE
+-- ============================================================
+
+function ShakerPersistence.LoadPlayerData(player, profile)
+	local playerShakers = player:FindFirstChild("Shakers")
+	if not playerShakers then
+		playerShakers = Instance.new("Folder")
+		playerShakers.Name = "Shakers"
+		playerShakers.Parent = player
+	end
+
+	-- Restaurar contenido de shakers
+	if profile.Data.ShakerContents then
+		for shakerNumber, contents in pairs(profile.Data.ShakerContents) do
+			if tonumber(shakerNumber) then
+				local shakerFolder = playerShakers:FindFirstChild(shakerNumber)
+
+				if not shakerFolder then
+					shakerFolder = Instance.new("Folder")
+					shakerFolder.Name = shakerNumber
+					shakerFolder.Parent = playerShakers
+				else
+					shakerFolder:ClearAllChildren()
+				end
+
+				for _, childData in ipairs(contents) do
+					if childData.ClassName == "Folder" then
+						DeserializeFolder(childData, shakerFolder)
+					else
+						DeserializeValue(childData, shakerFolder)
+					end
+				end
+			end
+		end
+	end
+
+	-- Restaurar mezclas activas
+	task.spawn(function()
+		task.wait(2)
+		ShakerPersistence.RestoreActiveShakes(player, profile.Data)
+	end)
+
+	print("✅ Loaded data for " .. player.Name)
+end
+
+-- ============================================================
+-- RESTAURAR MEZCLAS ACTIVAS
+-- ============================================================
+
+function ShakerPersistence.RestoreActiveShakes(player, savedData)
+	if not savedData or not savedData.ActiveShakes then return end
+
+	local currentTime = os.time()
+	local saveTime = savedData.SaveTime or currentTime
+	local offlineTime = currentTime - saveTime
+
+	print("🕐 Player " .. player.Name .. " was offline for " .. offlineTime .. " seconds")
+
+	for shakerNumber, shakeData in pairs(savedData.ActiveShakes) do
+		shakerNumber = tonumber(shakerNumber)
+		if not shakerNumber then continue end
+
+		local timeRemaining = shakeData.TimeRemaining - offlineTime
+
+		if timeRemaining <= 0 then
+			-- Shake completado offline
+			print("✅ Shake " .. shakerNumber .. " completed offline, creating juice...")
+
+			task.spawn(function()
+				task.wait(0.5)
+
+				local playerShakers = player:FindFirstChild("Shakers")
+				if not playerShakers then return end
+
+				local shakerFolder = playerShakers:FindFirstChild(tostring(shakerNumber))
+				if not shakerFolder then return end
+
+				local ingredientFolders = {}
+				for _, child in ipairs(shakerFolder:GetChildren()) do
+					if child:IsA("Folder") then
+						table.insert(ingredientFolders, child)
+					end
+				end
+
+				if #ingredientFolders > 0 then
+					ShakerJuice.CreateJuice(player, shakerNumber, ingredientFolders, IngredientConfig, MutationConfig)
+
+					local shakerModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+					if shakerModel and shakeData.MixedColor then
+						local mixedColor = Color3.new(
+							shakeData.MixedColor[1],
+							shakeData.MixedColor[2],
+							shakeData.MixedColor[3]
+						)
+						ShakerEffects.PlayPourEffect(shakerModel, mixedColor)
+					end
+
+					print("🧃 Offline juice created for Shaker " .. shakerNumber)
+				end
+			end)
+		else
+			-- Shake en progreso, reanudarlo
+			print("⏳ Shake " .. shakerNumber .. " still in progress, resuming...")
+
+			task.spawn(function()
+				task.wait(1)
+
+				local playerShakers = player:FindFirstChild("Shakers")
+				if not playerShakers then return end
+
+				local shakerFolder = playerShakers:FindFirstChild(tostring(shakerNumber))
+				if not shakerFolder then return end
+
+				local ingredientFolders = {}
+				for _, child in ipairs(shakerFolder:GetChildren()) do
+					if child:IsA("Folder") then
+						table.insert(ingredientFolders, child)
+					end
+				end
+
+				if #ingredientFolders > 0 then
+					local shakeKey = player.UserId .. "_" .. shakerNumber
+
+					local mixedColor = Color3.new(
+						shakeData.MixedColor[1],
+						shakeData.MixedColor[2],
+						shakeData.MixedColor[3]
+					)
+
+					ShakerManager.ActiveShakes[shakeKey] = {
+						startTime = tick(),
+						duration = timeRemaining,
+						player = player,
+						shakerNumber = shakerNumber,
+						cancelled = false,
+						mixedColor = mixedColor,
+						soundClone = nil,
+						contentPart = nil
+					}
+
+					local currentModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+					if currentModel then
+						local soundClone, contentPart = 
+							ShakerEffects.StartShakeEffects(currentModel, mixedColor)
+
+						ShakerManager.ActiveShakes[shakeKey].soundClone = soundClone
+						ShakerManager.ActiveShakes[shakeKey].contentPart = contentPart
+
+						ShakerEffects.SetStartButtonColor(currentModel, true)
+					end
+
+					task.spawn(function()
+						ShakerManager.UpdateShakeLoop(shakeKey, timeRemaining)
+					end)
+
+					print("▶️ Resumed shake for Shaker " .. shakerNumber)
+				end
+			end)
+		end
+	end
+end
+
+-- ============================================================
+-- GESTIÓN DE JUGADORES
+-- ============================================================
+
+local function PlayerAdded(player)
+	InitializeDependencies()
+
+	-- Iniciar sesión del profile
+	local profile = ShakerStore:StartSessionAsync(tostring(player.UserId), {
+		Cancel = function()
+			return player.Parent ~= Players
+		end,
+	})
+
+	if profile ~= nil then
+		profile:AddUserId(player.UserId) -- GDPR compliance
+		profile:Reconcile() -- Llenar valores faltantes del template
+
+		-- Conectar evento de fin de sesión
+		profile.OnSessionEnd:Connect(function()
+			Profiles[player] = nil
+			player:Kick("Profile session ended - Please rejoin")
+		end)
+
+		if player.Parent == Players then
+			Profiles[player] = profile
+			print("✅ Profile loaded for " .. player.Name)
+
+			-- Cargar datos del shaker
+			task.wait(1)
+			ShakerPersistence.LoadPlayerData(player, profile)
+		else
+			-- El jugador se fue antes de cargar
+			profile:EndSession()
+		end
+	else
+		-- Falló al cargar el profile
+		warn("❌ Failed to load profile for " .. player.Name)
+		player:Kick("Data loading failed - Please rejoin")
+	end
+end
+
+local function PlayerRemoving(player)
+	local profile = Profiles[player]
+	if profile then
+		-- Actualizar datos antes de cerrar sesión
+		ShakerPersistence.UpdatePlayerData(player)
+
+		-- Cerrar sesión del profile
+		profile:EndSession()
+		print("👋 Profile saved for " .. player.Name)
+	end
+end
+
+-- ============================================================
+-- AUTO-GUARDADO
+-- ============================================================
+
+task.spawn(function()
+	while true do
+		task.wait(120) -- Cada 2 minutos
+
+		for player, profile in pairs(Profiles) do
+			if profile:IsActive() then
+				task.spawn(function()
+					ShakerPersistence.UpdatePlayerData(player)
+				end)
+			end
+		end
+	end
+end)
+
+-- ============================================================
+-- EVENTOS
+-- ============================================================
+
+Players.PlayerAdded:Connect(PlayerAdded)
+Players.PlayerRemoving:Connect(PlayerRemoving)
+
+game:BindToClose(function()
+	-- Guardar todos los profiles antes de cerrar
+	for player, profile in pairs(Profiles) do
+		if profile:IsActive() then
+			ShakerPersistence.UpdatePlayerData(player)
+		end
+	end
+
+	-- Dar tiempo para que se guarden
+	task.wait(3)
+end)
+
+print("✅ ShakerPersistence with ProfileStore LOADED")
+
+-- Exponer función pública para guardado manual
+function ShakerPersistence.GetProfile(player)
+	return Profiles[player]
+end
+
+return ShakerPersistence
