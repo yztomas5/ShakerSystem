@@ -1,0 +1,227 @@
+-- Script: VisualizeJuices.lua (ARREGLADO)
+-- Ubicación: ServerScriptService
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local IngredientConfig = require(ReplicatedStorage.Modules.Config.IngredientConfig)
+local plotsFolder = Workspace:WaitForChild("Plots")
+
+local function clearJuiceContent(contentPart)
+	-- Eliminar SOLO las partes de ingredientes, NO los sonidos ni efectos
+	for _, child in ipairs(contentPart:GetChildren()) do
+		if child:IsA("BasePart") and child.Name ~= "Content" then
+			child:Destroy()
+		end
+	end
+end
+
+local function createJuiceParts(contentPart, ingredients)
+	clearJuiceContent(contentPart)
+
+	local numIngredients = #ingredients
+	if numIngredients == 0 then return end
+
+	-- Obtener dimensiones de Content ORIGINAL (no de los clones)
+	local contentSize = contentPart.Size
+	local contentCFrame = contentPart.CFrame
+
+	-- Calcular altura de cada parte
+	local partHeight = contentSize.Y / numIngredients
+
+	for i, ingredientName in ipairs(ingredients) do
+		local ingredientData = IngredientConfig.Ingredients[ingredientName]
+		if ingredientData then
+			-- Crear una parte NUEVA (no clonar Content)
+			local juicePart = Instance.new("Part")
+			juicePart.Name = "Layer_" .. ingredientName .. "_" .. i
+			juicePart.Transparency = 0
+			juicePart.Color = ingredientData.Color
+			juicePart.Material = Enum.Material.SmoothPlastic
+
+			-- Ajustar tamaño (misma X y Z, altura dividida)
+			juicePart.Size = Vector3.new(contentSize.X, partHeight, contentSize.Z)
+
+			-- Posicionar: empezar desde abajo y apilar hacia arriba
+			local offsetY = -(contentSize.Y / 2) + (partHeight / 2) + ((i - 1) * partHeight)
+			juicePart.CFrame = contentCFrame * CFrame.new(0, offsetY, 0)
+
+			-- Anclar para que no caiga
+			juicePart.Anchored = true
+			juicePart.CanCollide = false
+
+			juicePart.Parent = contentPart
+		end
+	end
+end
+
+local function updateShakerJuices(player, shakerNumber)
+	local playerShakers = player:FindFirstChild("Shakers")
+	if not playerShakers then return end
+
+	local shakerFolder = playerShakers:FindFirstChild(tostring(shakerNumber))
+	if not shakerFolder then return end
+
+	-- Obtener lista de ingredientes en este shaker
+	local ingredients = {}
+	for _, ingredientFolder in ipairs(shakerFolder:GetChildren()) do
+		if ingredientFolder:IsA("Folder") then
+			table.insert(ingredients, ingredientFolder.Name)
+		end
+	end
+
+	-- Buscar el modelo del shaker en el workspace
+	local currentPlotValue = player:FindFirstChild("CurrentPlot")
+	if not currentPlotValue then return end
+
+	local plotNumber = currentPlotValue.Value
+	if plotNumber == "" then return end
+
+	local plotFolder = plotsFolder:FindFirstChild(plotNumber)
+	if not plotFolder then return end
+
+	local plotShakersRoot = plotFolder:FindFirstChild("Shakers")
+	if not plotShakersRoot then return end
+
+	local modelInside = plotShakersRoot:FindFirstChildWhichIsA("Model")
+	if not modelInside then return end
+
+	local realShakersFolder = modelInside:FindFirstChild("Shakers")
+	if not realShakersFolder then return end
+
+	-- Buscar el modelo numerado que coincida con el shaker
+	local shakerModel = realShakersFolder:FindFirstChild(tostring(shakerNumber))
+	if not shakerModel then return end
+
+	-- Buscar Juices folder dentro del modelo
+	local juicesFolder = shakerModel:FindFirstChild("Juices")
+	if not juicesFolder then return end
+
+	-- Buscar la parte Content
+	local contentPart = juicesFolder:FindFirstChild("Content")
+	if not contentPart or not contentPart:IsA("BasePart") then return end
+
+	-- Crear las partes visuales
+	createJuiceParts(contentPart, ingredients)
+end
+
+local function updateAllShakerJuices(player)
+	local playerShakers = player:FindFirstChild("Shakers")
+	if not playerShakers then return end
+
+	for _, shakerFolder in ipairs(playerShakers:GetChildren()) do
+		if shakerFolder:IsA("Folder") then
+			local shakerNumber = tonumber(shakerFolder.Name)
+			if shakerNumber then
+				updateShakerJuices(player, shakerNumber)
+			end
+		end
+	end
+end
+
+local function connectShakerJuiceChanges(player)
+	local playerShakers = player:WaitForChild("Shakers", 5)
+	if not playerShakers then return end
+
+	-- Detectar cuando se añaden folders de shakers
+	playerShakers.ChildAdded:Connect(function(shakerFolder)
+		if shakerFolder:IsA("Folder") then
+			local shakerNumber = tonumber(shakerFolder.Name)
+			if shakerNumber then
+				-- Detectar cuando se añaden ingredientes a este shaker
+				shakerFolder.ChildAdded:Connect(function()
+					task.wait(0.1)
+					updateShakerJuices(player, shakerNumber)
+				end)
+
+				-- Detectar cuando se eliminan ingredientes
+				shakerFolder.ChildRemoved:Connect(function()
+					task.wait(0.1)
+					updateShakerJuices(player, shakerNumber)
+				end)
+
+				-- Actualizar inmediatamente
+				updateShakerJuices(player, shakerNumber)
+			end
+		end
+	end)
+
+	-- Conectar listeners a shakers existentes
+	for _, shakerFolder in ipairs(playerShakers:GetChildren()) do
+		if shakerFolder:IsA("Folder") then
+			local shakerNumber = tonumber(shakerFolder.Name)
+			if shakerNumber then
+				shakerFolder.ChildAdded:Connect(function()
+					task.wait(0.1)
+					updateShakerJuices(player, shakerNumber)
+				end)
+
+				shakerFolder.ChildRemoved:Connect(function()
+					task.wait(0.1)
+					updateShakerJuices(player, shakerNumber)
+				end)
+			end
+		end
+	end
+
+	-- Actualizar todo inicialmente
+	updateAllShakerJuices(player)
+end
+
+local function monitorPlotModelChanges(player)
+	local currentPlotValue = player:FindFirstChild("CurrentPlot")
+	if not currentPlotValue then return end
+
+	local function setupModelMonitoring()
+		local plotNumber = currentPlotValue.Value
+		if plotNumber == "" then return end
+
+		local plotFolder = plotsFolder:FindFirstChild(plotNumber)
+		if not plotFolder then return end
+
+		local plotShakersRoot = plotFolder:FindFirstChild("Shakers")
+		if not plotShakersRoot then
+			plotShakersRoot = plotFolder:WaitForChild("Shakers", 10)
+		end
+
+		if not plotShakersRoot then return end
+
+		-- Detectar cuando se añade un nuevo modelo
+		plotShakersRoot.ChildAdded:Connect(function(child)
+			if child:IsA("Model") then
+				print("🎨 New Shaker model detected for player " .. player.Name .. " - Updating juices...")
+				task.wait(1)
+				updateAllShakerJuices(player)
+				print("✓ Juices visualization updated")
+			end
+		end)
+
+		-- Actualizar cuando cambia el plot del jugador
+		currentPlotValue.Changed:Connect(function()
+			task.wait(1)
+			setupModelMonitoring()
+			updateAllShakerJuices(player)
+		end)
+	end
+
+	setupModelMonitoring()
+end
+
+Players.PlayerAdded:Connect(function(player)
+	player:WaitForChild("CurrentPlot")
+	task.wait(1)
+	connectShakerJuiceChanges(player)
+	monitorPlotModelChanges(player)
+end)
+
+-- Para jugadores ya en el juego
+for _, player in ipairs(Players:GetPlayers()) do
+	if player:FindFirstChild("CurrentPlot") then
+		task.spawn(function()
+			task.wait(1)
+			connectShakerJuiceChanges(player)
+			monitorPlotModelChanges(player)
+		end)
+	end
+end
