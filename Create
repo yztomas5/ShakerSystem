@@ -1,0 +1,243 @@
+-- Script: SyncShakers.lua
+-- Ubicación: ServerScriptService
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local plotsFolder = Workspace:WaitForChild("Plots")
+
+-- Tabla para trackear conexiones por jugador (para desconectar cuando cambie de plot o salga)
+local playerState = {}
+
+-- Helpers
+local function ensurePlayerShakersFolder(player)
+	local f = player:FindFirstChild("Shakers")
+	if not f then
+		f = Instance.new("Folder")
+		f.Name = "Shakers"
+		f.Parent = player
+	end
+	return f
+end
+
+-- Obtiene el folder "Shakers" real dentro del modelo actual del plot del jugador.
+-- Retorna: realShakersFolder (Folder) o nil
+local function getRealShakersFolderForPlayer(player)
+	local currentPlotValue = player:FindFirstChild("CurrentPlot")
+	if not currentPlotValue then return nil end
+	local plotNumber = currentPlotValue.Value
+	if plotNumber == "" then return nil end
+
+	local plotFolder = plotsFolder:FindFirstChild(plotNumber)
+	if not plotFolder then return nil end
+
+	local plotShakersRoot = plotFolder:FindFirstChild("Shakers")
+	if not plotShakersRoot then return nil end
+
+	-- El model que contiene los shakers puede cambiar; buscamos el Model dentro de plotShakersRoot
+	local modelInside = plotShakersRoot:FindFirstChildWhichIsA("Model")
+	if not modelInside then return nil end
+
+	local realShakersFolder = modelInside:FindFirstChild("Shakers")
+	if not realShakersFolder then return nil end
+
+	return realShakersFolder
+end
+
+-- Sincroniza: compara names entre realShakersFolder y player.Shakers
+-- Solo crea y/o borra lo estrictamente necesario
+local function syncShakers(player)
+	if not player or not player.Parent then return end
+	local playerShakers = ensurePlayerShakersFolder(player)
+	local realShakersFolder = getRealShakersFolderForPlayer(player)
+	if not realShakersFolder then
+		-- Si no existe el folder real, no hacemos nada (no tocamos nada)
+		return
+	end
+
+	-- Construir sets de nombres
+	local desired = {}
+	for _, child in ipairs(realShakersFolder:GetChildren()) do
+		if child:IsA("Model") then
+			desired[tostring(child.Name)] = true
+		end
+	end
+
+	local existing = {}
+	for _, child in ipairs(playerShakers:GetChildren()) do
+		if child:IsA("Folder") then
+			existing[tostring(child.Name)] = child
+		end
+	end
+
+	-- Añadir faltantes
+	for name, _ in pairs(desired) do
+		if not existing[name] then
+			local newFolder = Instance.new("Folder")
+			newFolder.Name = name
+			newFolder.Parent = playerShakers
+		end
+	end
+
+	-- Borrar extras (solo si ya no existen en desired)
+	for name, folderInstance in pairs(existing) do
+		if not desired[name] then
+			-- eliminar carpeta inexistente en el plot
+			folderInstance:Destroy()
+		end
+	end
+end
+
+-- Limpia conexiones previas para un jugador (si existen)
+local function clearPlayerConnections(player)
+	local state = playerState[player]
+	if not state then return end
+
+	local conns = state.connections
+	if conns then
+		for _, c in ipairs(conns) do
+			if c and c.Disconnect then
+				-- pcall por seguridad
+				pcall(function() c:Disconnect() end)
+			end
+		end
+	end
+
+	playerState[player] = nil
+end
+
+-- Conecta listeners para detectar cambios en el model dentro de Plot.<num>.Shakers
+local function attachListenersForPlayer(player)
+	-- limpiar conexiones previas
+	clearPlayerConnections(player)
+
+	local state = { connections = {} }
+	playerState[player] = state
+
+	-- función que reconecta listeners al model actual del plot
+	local function connectToPlotModel()
+		-- Primero limpiamos listeners previos
+		for _, c in ipairs(state.connections) do
+			if c and c.Disconnect then pcall(function() c:Disconnect() end) end
+		end
+		state.connections = {}
+
+		local currentPlotValue = player:FindFirstChild("CurrentPlot")
+		if not currentPlotValue then return end
+		local plotNumber = currentPlotValue.Value
+		if plotNumber == "" then return end
+
+		local plotFolder = plotsFolder:FindFirstChild(plotNumber)
+		if not plotFolder then return end
+
+		local plotShakersRoot = plotFolder:FindFirstChild("Shakers")
+		if not plotShakersRoot then return end
+
+		-- Listener para cuando el Model dentro de plotShakersRoot cambie (se remueva o aparezca uno nuevo)
+		local rootChildAddedConn = plotShakersRoot.ChildAdded:Connect(function(child)
+			-- si aparece un Model nuevo, resync y reconectar listeners al nuevo model
+			if child:IsA("Model") then
+				-- pequeña espera para que el model cargue su folder interno
+				task.defer(function()
+					task.wait(0.05)
+					syncShakers(player)
+					connectToPlotModel()
+				end)
+			end
+		end)
+		table.insert(state.connections, rootChildAddedConn)
+
+		local rootChildRemovedConn = plotShakersRoot.ChildRemoved:Connect(function(child)
+			-- si se removió el model, resync (posible que haya quedado sin model)
+			if child:IsA("Model") then
+				task.defer(function()
+					task.wait(0.05)
+					syncShakers(player)
+					connectToPlotModel()
+				end)
+			end
+		end)
+		table.insert(state.connections, rootChildRemovedConn)
+
+		-- Encontrar el model actual (si existe) y conectar a su carpeta "Shakers"
+		local modelInside = plotShakersRoot:FindFirstChildWhichIsA("Model")
+		if not modelInside then return end
+
+		local realShakersFolder = modelInside:FindFirstChild("Shakers")
+		if not realShakersFolder then return end
+
+		-- Si se añaden o quitan hijos (Model shakers) dentro del realShakersFolder, resync
+		local childAddedConn = realShakersFolder.ChildAdded:Connect(function(child)
+			-- sólo si es Model
+			if child:IsA("Model") then
+				-- debounce mínimo para evitar múltiples llamadas seguidas en cambios masivos
+				task.defer(function()
+					task.wait(0.03)
+					syncShakers(player)
+				end)
+			end
+		end)
+		table.insert(state.connections, childAddedConn)
+
+		local childRemovedConn = realShakersFolder.ChildRemoved:Connect(function(child)
+			if child:IsA("Model") then
+				task.defer(function()
+					task.wait(0.03)
+					syncShakers(player)
+				end)
+			end
+		end)
+		table.insert(state.connections, childRemovedConn)
+	end
+
+	-- Conectar al cambio de CurrentPlot para reconectar listeners
+	local currentPlotValue = player:FindFirstChild("CurrentPlot")
+	if currentPlotValue then
+		local cpConn = currentPlotValue.Changed:Connect(function()
+			-- esperar un tick para que el nuevo plot se instancie
+			task.defer(function()
+				task.wait(0.05)
+				syncShakers(player)
+				connectToPlotModel()
+			end)
+		end)
+		table.insert(state.connections, cpConn)
+	end
+
+	-- Inicialmente sincronizamos y conectamos a model actual
+	syncShakers(player)
+	connectToPlotModel()
+end
+
+-- PlayerAdded
+Players.PlayerAdded:Connect(function(player)
+	ensurePlayerShakersFolder(player)
+	-- esperamos CurrentPlot (si no existe inmediatamente, aún así attachListeners manejará)
+	if not player:FindFirstChild("CurrentPlot") then
+		-- no bloqueante: esperar hasta que exista CurrentPlot (si lo hace)
+		player.ChildAdded:Connect(function(child)
+			if child.Name == "CurrentPlot" then
+				-- un pequeño delay para asegurar valor correcto
+				task.defer(function()
+					task.wait(0.05)
+					attachListenersForPlayer(player)
+				end)
+			end
+		end)
+	else
+		attachListenersForPlayer(player)
+	end
+end)
+
+-- Cleanup al salir
+Players.PlayerRemoving:Connect(function(player)
+	clearPlayerConnections(player)
+end)
+
+-- Si el script reinicia con jugadores adentro
+for _, player in ipairs(Players:GetPlayers()) do
+	ensurePlayerShakersFolder(player)
+	if player:FindFirstChild("CurrentPlot") then
+		attachListenersForPlayer(player)
+	end
+end
