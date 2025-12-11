@@ -28,7 +28,7 @@ local COOLDOWN_TIME = 5 -- Tiempo en segundos
 
 -- Función para verificar si un jugador puede interactuar
 local function canPlayerInteract(player)
-	local currentTime = tick()
+	local currentTime = os.clock()
 	local cooldownEnd = playerCooldowns[player.UserId]
 
 	if not cooldownEnd then
@@ -40,7 +40,7 @@ end
 
 -- Inicializar cooldown cuando un jugador se une
 Players.PlayerAdded:Connect(function(player)
-	playerCooldowns[player.UserId] = tick() + COOLDOWN_TIME
+	playerCooldowns[player.UserId] = os.clock() + COOLDOWN_TIME
 	print("⏳ Player " .. player.Name .. " has a " .. COOLDOWN_TIME .. "s cooldown before interacting")
 
 	-- Esperar el cooldown y notificar
@@ -54,6 +54,10 @@ end)
 -- Limpiar cuando un jugador se va
 Players.PlayerRemoving:Connect(function(player)
 	playerCooldowns[player.UserId] = nil
+	-- Cancelar shakes activos del jugador
+	for i = 1, 10 do
+		ShakerManager.CancelShake(player, i)
+	end
 end)
 
 -- ============================================================
@@ -308,32 +312,32 @@ local function setupShakerPrompts(shakerModel, shakerNumber, plotNumber)
 		handleStartCancel(player, shakerNumber, plotNumber)
 	end)
 
-	-- Loop de actualización continua
+	-- Loop de actualización cada 0.5 segundos (en lugar de cada frame)
 	local updateConnection
-	updateConnection = RunService.Heartbeat:Connect(function()
-		if not shakerModel.Parent or not addPart.Parent then
-			updateConnection:Disconnect()
-			return
-		end
+	local function updateLoop()
+		while shakerModel.Parent and addPart.Parent do
+			for _, player in ipairs(Players:GetPlayers()) do
+				if player:FindFirstChild("CurrentPlot") and player.CurrentPlot.Value == plotNumber then
+					local character = player.Character
+					if character and character:FindFirstChild("HumanoidRootPart") then
+						local distanceToAdd = (character.HumanoidRootPart.Position - addPart.Position).Magnitude
+						local distanceToStart = (character.HumanoidRootPart.Position - startPart.Position).Magnitude
 
-		for _, player in ipairs(Players:GetPlayers()) do
-			if player:FindFirstChild("CurrentPlot") and player.CurrentPlot.Value == plotNumber then
-				local character = player.Character
-				if character and character:FindFirstChild("HumanoidRootPart") then
-					local distanceToAdd = (character.HumanoidRootPart.Position - addPart.Position).Magnitude
-					local distanceToStart = (character.HumanoidRootPart.Position - startPart.Position).Magnitude
+						if distanceToAdd <= 10 then
+							updateAddRemovePrompt(addRemovePrompt, player, shakerNumber)
+						end
 
-					if distanceToAdd <= 10 then
-						updateAddRemovePrompt(addRemovePrompt, player, shakerNumber)
-					end
-
-					if distanceToStart <= 10 then
-						updateStartPrompt(startPrompt, player, shakerNumber)
+						if distanceToStart <= 10 then
+							updateStartPrompt(startPrompt, player, shakerNumber)
+						end
 					end
 				end
 			end
+			task.wait(0.5) -- Actualizar cada medio segundo
 		end
-	end)
+	end
+
+	task.spawn(updateLoop)
 
 	print("✓ Prompts created for Shaker " .. shakerNumber)
 end
@@ -442,7 +446,7 @@ end
 
 -- Inicializar cooldowns para jugadores ya conectados
 for _, player in ipairs(Players:GetPlayers()) do
-	playerCooldowns[player.UserId] = tick() + COOLDOWN_TIME
+	playerCooldowns[player.UserId] = os.clock() + COOLDOWN_TIME
 	print("⏳ Player " .. player.Name .. " has a " .. COOLDOWN_TIME .. "s cooldown before interacting")
 end
 

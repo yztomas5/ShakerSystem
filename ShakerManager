@@ -48,7 +48,7 @@ function ShakerManager.StartShake(player, shakerNumber)
 
 	-- Crear entrada en shakes activos
 	ShakerManager.ActiveShakes[shakeKey] = {
-		startTime = tick(),
+		startTime = os.clock(),
 		duration = totalDuration,
 		originalDuration = totalDuration,
 		player = player,
@@ -105,7 +105,7 @@ function ShakerManager.ReduceShakeTime(player, shakerNumber, percentage)
 	end
 
 	-- Calcular tiempo transcurrido actual
-	local elapsed = tick() - shakeData.startTime
+	local elapsed = os.clock() - shakeData.startTime
 	local currentRemaining = shakeData.duration - elapsed
 
 	-- Reducir el tiempo restante
@@ -124,7 +124,7 @@ end
 function ShakerManager.UpdateShakeLoop(shakeKey, totalDuration)
 	local elapsed = 0
 	local lastModel = nil
-	local startTime = tick()
+	local startTime = os.clock()
 
 	local updateConnection
 	updateConnection = RunService.Heartbeat:Connect(function(dt)
@@ -137,7 +137,7 @@ function ShakerManager.UpdateShakeLoop(shakeKey, totalDuration)
 		end
 
 		-- Calcular tiempo transcurrido desde el inicio
-		elapsed = tick() - startTime
+		elapsed = os.clock() - startTime
 		local remaining = math.max(0, shakeData.duration - elapsed)
 
 		-- Obtener modelo actual
