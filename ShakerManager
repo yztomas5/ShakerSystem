@@ -1,0 +1,278 @@
+-- Module: ShakerManager.lua
+-- Ubicación: ReplicatedStorage.Modules.Utils.ShakerLogic
+
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local ShakerInventory = require(script.Parent.ShakerInventory)
+local ShakerEffects = require(script.Parent.ShakerEffects)
+local ShakerJuice = require(script.Parent.ShakerJuice)
+local ShakerUI = require(script.Parent.ShakerUI)
+local ShakerModel = require(script.Parent.ShakerModel)
+
+local IngredientConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"):WaitForChild("IngredientConfig"))
+local MutationConfig = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Config"):WaitForChild("MutationConfig"))
+
+local ShakerManager = {}
+ShakerManager.ActiveShakes = {} -- Tabla de shakes activos
+
+-- Iniciar mezcla
+function ShakerManager.StartShake(player, shakerNumber)
+	local shakeKey = player.UserId .. "_" .. shakerNumber
+
+	-- Verificar si ya está activo
+	if ShakerManager.ActiveShakes[shakeKey] then 
+		warn("Shake already active for " .. shakeKey)
+		return false
+	end
+
+	-- Obtener ingredientes
+	local ingredientFolders = ShakerInventory.GetIngredientFolders(player, shakerNumber)
+	if #ingredientFolders == 0 then 
+		warn("No ingredients in shaker " .. shakerNumber)
+		return false
+	end
+
+	-- Calcular duración total
+	local totalDuration = 0
+	for _, folder in ipairs(ingredientFolders) do
+		local ingredientInfo = IngredientConfig.Ingredients[folder.Name]
+		if ingredientInfo then
+			totalDuration = totalDuration + ingredientInfo.ShakeDuration
+		end
+	end
+
+	-- Obtener colores y mezclarlos
+	local colors = ShakerEffects.GetIngredientColors(ingredientFolders, IngredientConfig)
+	local mixedColor = ShakerEffects.MixColors(colors)
+
+	-- Crear entrada en shakes activos
+	ShakerManager.ActiveShakes[shakeKey] = {
+		startTime = tick(),
+		duration = totalDuration,
+		originalDuration = totalDuration,
+		player = player,
+		shakerNumber = shakerNumber,
+		cancelled = false,
+		mixedColor = mixedColor,
+		soundClone = nil,
+		contentPart = nil
+	}
+
+	-- Obtener modelo actual
+	local currentModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+	if not currentModel then 
+		ShakerManager.ActiveShakes[shakeKey] = nil
+		warn("Could not find shaker model")
+		return false
+	end
+
+	-- Aplicar efectos iniciales
+	local soundClone, contentPart = ShakerEffects.StartShakeEffects(currentModel, mixedColor)
+	ShakerEffects.SetStartButtonColor(currentModel, true)
+
+	-- Guardar referencias
+	local shakeData = ShakerManager.ActiveShakes[shakeKey]
+	shakeData.soundClone = soundClone
+	shakeData.contentPart = contentPart
+
+	-- Desactivar prompt de start
+	local startPart = currentModel:FindFirstChild("Start")
+	if startPart then
+		local startPrompt = startPart:FindFirstChild("StartPrompt")
+		if startPrompt then
+			startPrompt.Enabled = false
+		end
+	end
+
+	-- Iniciar loop de actualización
+	task.spawn(function()
+		ShakerManager.UpdateShakeLoop(shakeKey, totalDuration)
+	end)
+
+	print("✅ Shake started for Shaker " .. shakerNumber .. " (" .. totalDuration .. "s)")
+	return true
+end
+
+-- Reducir tiempo de mezcla (para Energizing)
+function ShakerManager.ReduceShakeTime(player, shakerNumber, percentage)
+	local shakeKey = player.UserId .. "_" .. shakerNumber
+	local shakeData = ShakerManager.ActiveShakes[shakeKey]
+
+	if not shakeData then
+		warn("No active shake to reduce time for")
+		return false
+	end
+
+	-- Calcular tiempo transcurrido actual
+	local elapsed = tick() - shakeData.startTime
+	local currentRemaining = shakeData.duration - elapsed
+
+	-- Reducir el tiempo restante
+	local reduction = currentRemaining * percentage
+	local newRemaining = math.max(0, currentRemaining - reduction)
+
+	-- Ajustar la duración total para que el tiempo restante sea correcto
+	shakeData.duration = elapsed + newRemaining
+
+	print("⚡ Time reduced by " .. math.floor(percentage * 100) .. "% - New remaining: " .. math.ceil(newRemaining) .. "s")
+
+	return true
+end
+
+-- Loop de actualización del shake
+function ShakerManager.UpdateShakeLoop(shakeKey, totalDuration)
+	local elapsed = 0
+	local lastModel = nil
+	local startTime = tick()
+
+	local updateConnection
+	updateConnection = RunService.Heartbeat:Connect(function(dt)
+		local shakeData = ShakerManager.ActiveShakes[shakeKey]
+
+		-- Verificar si fue cancelado
+		if not shakeData or shakeData.cancelled then
+			updateConnection:Disconnect()
+			return
+		end
+
+		-- Calcular tiempo transcurrido desde el inicio
+		elapsed = tick() - startTime
+		local remaining = math.max(0, shakeData.duration - elapsed)
+
+		-- Obtener modelo actual
+		local currentModel = ShakerModel.GetCurrentShakerModel(shakeData.player, shakeData.shakerNumber)
+
+		-- Detectar cambio de modelo
+		if currentModel ~= lastModel then
+			if lastModel then
+				-- Limpiar efectos del modelo anterior
+				ShakerEffects.StopShakeEffects(
+					shakeData.soundClone,
+					shakeData.contentPart
+				)
+			end
+
+			if currentModel then
+				-- Aplicar efectos al nuevo modelo
+				local soundClone, contentPart = 
+					ShakerEffects.StartShakeEffects(currentModel, shakeData.mixedColor)
+
+				shakeData.soundClone = soundClone
+				shakeData.contentPart = contentPart
+
+				ShakerEffects.SetStartButtonColor(currentModel, true)
+			end
+
+			lastModel = currentModel
+		end
+
+		-- Actualizar display
+		if currentModel then
+			ShakerUI.UpdateStatusDisplay(currentModel, math.ceil(remaining), true)
+		end
+
+		-- Verificar si terminó
+		if elapsed >= shakeData.duration then
+			updateConnection:Disconnect()
+			ShakerManager.CompleteShake(shakeKey)
+		end
+	end)
+end
+
+-- Completar mezcla
+function ShakerManager.CompleteShake(shakeKey)
+	local shakeData = ShakerManager.ActiveShakes[shakeKey]
+	if not shakeData or shakeData.cancelled then return end
+
+	local player = shakeData.player
+	local shakerNumber = shakeData.shakerNumber
+	local mixedColor = shakeData.mixedColor
+
+	-- Obtener modelo final
+	local finalModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+
+	if finalModel then
+		-- Limpiar efectos
+		ShakerEffects.StopShakeEffects(
+			shakeData.soundClone,
+			shakeData.contentPart
+		)
+		ShakerEffects.SetStartButtonColor(finalModel, false)
+		ShakerUI.UpdateStatusDisplay(finalModel, 0, false)
+
+		-- Reproducir efecto de pour
+		ShakerEffects.PlayPourEffect(finalModel, mixedColor)
+
+		-- Reactivar prompt
+		local startPart = finalModel:FindFirstChild("Start")
+		if startPart then
+			local startPrompt = startPart:FindFirstChild("StartPrompt")
+			if startPrompt then
+				startPrompt.Enabled = true
+			end
+		end
+	end
+
+	-- Crear jugo
+	local ingredientFolders = ShakerInventory.GetIngredientFolders(player, shakerNumber)
+	ShakerJuice.CreateJuice(player, shakerNumber, ingredientFolders, IngredientConfig, MutationConfig)
+
+	-- Eliminar de activos
+	ShakerManager.ActiveShakes[shakeKey] = nil
+
+	print("✅ Shake completed for Shaker " .. shakerNumber)
+end
+
+-- Cancelar mezcla
+function ShakerManager.CancelShake(player, shakerNumber)
+	local shakeKey = player.UserId .. "_" .. shakerNumber
+
+	local shakeData = ShakerManager.ActiveShakes[shakeKey]
+	if not shakeData then 
+		warn("No active shake to cancel")
+		return false
+	end
+
+	-- Marcar como cancelado
+	shakeData.cancelled = true
+
+	-- Obtener modelo actual
+	local currentModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+
+	if currentModel then
+		-- Detener efectos
+		ShakerEffects.StopShakeEffects(
+			shakeData.soundClone,
+			shakeData.contentPart
+		)
+		ShakerEffects.SetStartButtonColor(currentModel, false)
+		ShakerUI.UpdateStatusDisplay(currentModel, 0, false)
+
+		-- Reactivar prompt
+		local startPart = currentModel:FindFirstChild("Start")
+		if startPart then
+			local startPrompt = startPart:FindFirstChild("StartPrompt")
+			if startPrompt then
+				startPrompt.Enabled = true
+			end
+		end
+	end
+
+	-- Devolver ingredientes
+	ShakerInventory.ReturnAllIngredients(player, shakerNumber)
+
+	-- Eliminar de activos
+	ShakerManager.ActiveShakes[shakeKey] = nil
+
+	print("❌ Shake cancelled for Shaker " .. shakerNumber)
+	return true
+end
+
+-- Verificar si un shake está activo
+function ShakerManager.IsShakeActive(player, shakerNumber)
+	local shakeKey = player.UserId .. "_" .. shakerNumber
+	return ShakerManager.ActiveShakes[shakeKey] ~= nil
+end
+
+return ShakerManager
