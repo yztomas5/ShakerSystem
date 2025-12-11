@@ -1,0 +1,462 @@
+-- Script: ShakerProximityPrompts.lua (MODULAR)
+-- Ubicación: ServerScriptService
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Importar módulos
+local ShakerLogic = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Utils"):WaitForChild("ShakerLogic")
+local ShakerInventory = require(ShakerLogic:WaitForChild("ShakerInventory"))
+local ShakerEffects = require(ShakerLogic:WaitForChild("ShakerEffects"))
+local ShakerTool = require(ShakerLogic:WaitForChild("ShakerTool"))
+local ShakerManager = require(ShakerLogic:WaitForChild("ShakerManager"))
+local ShakerModel = require(ShakerLogic:WaitForChild("ShakerModel"))
+
+local ShakerDataManager = require(script.Parent.ShakerDataManager)
+
+local plotsFolder = Workspace:WaitForChild("Plots")
+local MAX_INGREDIENTS = 3
+
+-- ============================================================
+-- SISTEMA DE COOLDOWN PARA JUGADORES
+-- ============================================================
+
+local playerCooldowns = {} -- Tabla para trackear el cooldown de cada jugador
+local COOLDOWN_TIME = 5 -- Tiempo en segundos
+
+-- Función para verificar si un jugador puede interactuar
+local function canPlayerInteract(player)
+	local currentTime = tick()
+	local cooldownEnd = playerCooldowns[player.UserId]
+
+	if not cooldownEnd then
+		return false -- El jugador aún no ha sido registrado
+	end
+
+	return currentTime >= cooldownEnd
+end
+
+-- Inicializar cooldown cuando un jugador se une
+Players.PlayerAdded:Connect(function(player)
+	playerCooldowns[player.UserId] = tick() + COOLDOWN_TIME
+	print("⏳ Player " .. player.Name .. " has a " .. COOLDOWN_TIME .. "s cooldown before interacting")
+
+	-- Esperar el cooldown y notificar
+	task.delay(COOLDOWN_TIME, function()
+		if player and player.Parent then
+			print("✓ Player " .. player.Name .. " can now interact with shakers")
+		end
+	end)
+end)
+
+-- Limpiar cuando un jugador se va
+Players.PlayerRemoving:Connect(function(player)
+	playerCooldowns[player.UserId] = nil
+end)
+
+-- ============================================================
+-- ACTUALIZACIÓN DE PROMPTS
+-- ============================================================
+
+local function updateAddRemovePrompt(prompt, player, shakerNumber)
+	-- Verificar cooldown primero
+	if not canPlayerInteract(player) then
+		prompt.Enabled = false
+		return
+	end
+
+	local character = player.Character
+	if not character then
+		prompt.Enabled = false
+		return
+	end
+
+	local tool = ShakerTool.GetEquippedTool(character)
+	local ingredientCount = ShakerInventory.CountIngredients(player, shakerNumber)
+	local isShakeActive = ShakerManager.IsShakeActive(player, shakerNumber)
+
+	-- Si hay un shake activo Y tiene Energizing equipado
+	if isShakeActive and tool and tool.Name == "Energizing" then
+		local toolId = ShakerTool.GetToolId(tool)
+		if toolId then
+			local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, "Energizing", toolId)
+			if energizingFolder then
+				prompt.ActionText = "Add Energizing"
+				prompt.Enabled = true
+				return
+			end
+		end
+	end
+
+	-- Si hay un shake activo sin Energizing, deshabilitar
+	if isShakeActive then
+		prompt.Enabled = false
+		return
+	end
+
+	-- Caso 1: Añadir ingrediente (tiene herramienta Y hay espacio)
+	if tool and ShakerTool.IsIngredientTool(tool) and ingredientCount < MAX_INGREDIENTS then
+		local toolId = ShakerTool.GetToolId(tool)
+		if toolId then
+			local ingredientFolder = ShakerInventory.FindIngredientInPlayerInventory(player, tool.Name, toolId)
+			if ingredientFolder then
+				prompt.ActionText = "Add (" .. ingredientCount .. "/" .. MAX_INGREDIENTS .. ")"
+				prompt.Enabled = true
+				return
+			end
+		end
+	end
+
+	-- Caso 2: Remover ingrediente (hay ingredientes, sin importar herramienta)
+	if ingredientCount > 0 then
+		prompt.ActionText = "Remove (" .. ingredientCount .. "/" .. MAX_INGREDIENTS .. ")"
+		prompt.Enabled = true
+		return
+	end
+
+	-- Caso 3: No hacer nada
+	prompt.Enabled = false
+end
+
+local function updateStartPrompt(prompt, player, shakerNumber)
+	-- Verificar cooldown primero
+	if not canPlayerInteract(player) then
+		prompt.Enabled = false
+		return
+	end
+
+	-- Si hay un shake activo, mostrar "Cancel"
+	if ShakerManager.IsShakeActive(player, shakerNumber) then
+		prompt.ActionText = "Cancel"
+		prompt.Enabled = true
+		return
+	end
+
+	-- Si hay ingredientes, mostrar "Start"
+	local ingredientCount = ShakerInventory.CountIngredients(player, shakerNumber)
+	if ingredientCount > 0 then
+		prompt.ActionText = "Start"
+		prompt.Enabled = true
+	else
+		prompt.Enabled = false
+	end
+end
+
+-- ============================================================
+-- MANEJO DE INTERACCIONES
+-- ============================================================
+
+local function handleAddRemove(player, shakerNumber, plotNumber)
+	-- Verificar cooldown
+	if not canPlayerInteract(player) then
+		return
+	end
+
+	if player:FindFirstChild("CurrentPlot") and player.CurrentPlot.Value ~= plotNumber then
+		return
+	end
+
+	local character = player.Character
+	if not character then return end
+
+	local tool = ShakerTool.GetEquippedTool(character)
+	local isShakeActive = ShakerManager.IsShakeActive(player, shakerNumber)
+
+	-- CASO ESPECIAL: Si hay shake activo Y tiene Energizing
+	if isShakeActive and tool and tool.Name == "Energizing" then
+		local toolId = ShakerTool.GetToolId(tool)
+		if not toolId then return end
+
+		local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, "Energizing", toolId)
+		if energizingFolder then
+			-- Destruir tool y folder
+			tool:Destroy()
+			energizingFolder:Destroy()
+			task.wait(0.1)
+
+			-- Reducir tiempo en 25%
+			ShakerManager.ReduceShakeTime(player, shakerNumber, 0.25)
+
+			-- Reproducir sonido
+			local shakerModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+			if shakerModel then
+				local contentPart = ShakerModel.GetContentPart(shakerModel)
+				if contentPart then
+					ShakerEffects.PlayEnergizingSound(contentPart)
+				end
+			end
+
+			print("⚡ Energizing added to Shaker " .. shakerNumber .. " - Time reduced by 25%")
+		end
+		return
+	end
+
+	-- Si hay shake activo sin Energizing, no hacer nada
+	if isShakeActive then
+		return
+	end
+
+	-- Lógica normal de añadir/remover ingredientes
+	local ingredientCount = ShakerInventory.CountIngredients(player, shakerNumber)
+	local shouldAdd = tool 
+		and ShakerTool.IsIngredientTool(tool) 
+		and ingredientCount < MAX_INGREDIENTS
+
+	if shouldAdd then
+		-- Lógica de AÑADIR
+		local toolId = ShakerTool.GetToolId(tool)
+		if not toolId then return end
+
+		local ingredientFolder = ShakerInventory.FindIngredientInPlayerInventory(player, tool.Name, toolId)
+		if ingredientFolder then
+			tool:Destroy()
+			task.wait(0.1)
+
+			if ShakerInventory.AddIngredient(player, shakerNumber, ingredientFolder) then
+				-- Reproducir sonido
+				local shakerModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+				if shakerModel then
+					local contentPart = ShakerModel.GetContentPart(shakerModel)
+					if contentPart then
+						ShakerEffects.PlayAddIngredientSound(contentPart)
+					end
+				end
+			end
+		end
+	elseif ingredientCount > 0 then
+		-- Lógica de REMOVER (sin importar si tiene herramienta o no)
+		ShakerInventory.RemoveIngredient(player, shakerNumber)
+	end
+end
+
+local function handleStartCancel(player, shakerNumber, plotNumber)
+	-- Verificar cooldown
+	if not canPlayerInteract(player) then
+		return
+	end
+
+	if player:FindFirstChild("CurrentPlot") and player.CurrentPlot.Value ~= plotNumber then
+		return
+	end
+
+	-- Si está activo, cancelar
+	if ShakerManager.IsShakeActive(player, shakerNumber) then
+		ShakerManager.CancelShake(player, shakerNumber)
+	else
+		-- Iniciar shake
+		ShakerManager.StartShake(player, shakerNumber)
+	end
+end
+
+-- ============================================================
+-- CONFIGURACIÓN DE PROMPTS
+-- ============================================================
+
+local function setupShakerPrompts(shakerModel, shakerNumber, plotNumber)
+	local addPart = shakerModel:WaitForChild("Add", 5)
+	local startPart = shakerModel:WaitForChild("Start", 5)
+
+	if not addPart or not startPart then
+		warn("Shaker " .. shakerNumber .. " missing Add or Start parts")
+		return
+	end
+
+	-- Evitar duplicados
+	if addPart:FindFirstChild("AddRemovePrompt") then
+		return
+	end
+
+	print("Setting up prompts for Shaker " .. shakerNumber .. " in plot " .. plotNumber)
+
+	-- Crear ProximityPrompt para Add/Remove
+	local addRemovePrompt = Instance.new("ProximityPrompt")
+	addRemovePrompt.Name = "AddRemovePrompt"
+	addRemovePrompt.ActionText = "Interact"
+	addRemovePrompt.ObjectText = ""
+	addRemovePrompt.HoldDuration = 0.5
+	addRemovePrompt.MaxActivationDistance = 10
+	addRemovePrompt.RequiresLineOfSight = false
+	addRemovePrompt.Style = Enum.ProximityPromptStyle.Custom
+	addRemovePrompt.Enabled = false
+	addRemovePrompt.Parent = addPart
+
+	-- Crear ProximityPrompt para Start/Cancel
+	local startPrompt = Instance.new("ProximityPrompt")
+	startPrompt.Name = "StartPrompt"
+	startPrompt.ActionText = "Start"
+	startPrompt.ObjectText = ""
+	startPrompt.HoldDuration = 1
+	startPrompt.MaxActivationDistance = 10
+	startPrompt.RequiresLineOfSight = false
+	startPrompt.Style = Enum.ProximityPromptStyle.Custom
+	startPrompt.Enabled = false
+	startPrompt.Parent = startPart
+
+	-- Inicializar color del botón Start
+	if startPart:IsA("BasePart") then
+		startPart.Color = Color3.fromRGB(0, 255, 0)
+	end
+
+	-- Conectar eventos
+	addRemovePrompt.Triggered:Connect(function(player)
+		handleAddRemove(player, shakerNumber, plotNumber)
+	end)
+
+	startPrompt.Triggered:Connect(function(player)
+		handleStartCancel(player, shakerNumber, plotNumber)
+	end)
+
+	-- Loop de actualización continua
+	local updateConnection
+	updateConnection = RunService.Heartbeat:Connect(function()
+		if not shakerModel.Parent or not addPart.Parent then
+			updateConnection:Disconnect()
+			return
+		end
+
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player:FindFirstChild("CurrentPlot") and player.CurrentPlot.Value == plotNumber then
+				local character = player.Character
+				if character and character:FindFirstChild("HumanoidRootPart") then
+					local distanceToAdd = (character.HumanoidRootPart.Position - addPart.Position).Magnitude
+					local distanceToStart = (character.HumanoidRootPart.Position - startPart.Position).Magnitude
+
+					if distanceToAdd <= 10 then
+						updateAddRemovePrompt(addRemovePrompt, player, shakerNumber)
+					end
+
+					if distanceToStart <= 10 then
+						updateStartPrompt(startPrompt, player, shakerNumber)
+					end
+				end
+			end
+		end
+	end)
+
+	print("✓ Prompts created for Shaker " .. shakerNumber)
+end
+
+-- ============================================================
+-- MONITOREO DE PLOTS Y SHAKERS
+-- ============================================================
+
+local function monitorShakersFolder(realShakersFolder, plotNumber)
+	print("Monitoring Shakers folder in plot " .. plotNumber)
+
+	for _, shakerModel in ipairs(realShakersFolder:GetChildren()) do
+		if shakerModel:IsA("Model") then
+			local shakerNumber = tonumber(shakerModel.Name)
+			if shakerNumber then
+				task.spawn(function()
+					setupShakerPrompts(shakerModel, shakerNumber, plotNumber)
+				end)
+			end
+		end
+	end
+
+	realShakersFolder.ChildAdded:Connect(function(shakerModel)
+		if shakerModel:IsA("Model") then
+			local shakerNumber = tonumber(shakerModel.Name)
+			if shakerNumber then
+				print("New shaker detected: " .. shakerNumber .. " in plot " .. plotNumber)
+				task.spawn(function()
+					setupShakerPrompts(shakerModel, shakerNumber, plotNumber)
+				end)
+			end
+		end
+	end)
+end
+
+local function initializePlotShakers(plotFolder)
+	local plotNumber = plotFolder.Name
+	print("Initializing shakers for plot: " .. plotNumber)
+
+	local plotShakersRoot = plotFolder:FindFirstChild("Shakers")
+	if not plotShakersRoot then 
+		plotShakersRoot = plotFolder:WaitForChild("Shakers", 10)
+		if not plotShakersRoot then
+			warn("Timeout waiting for Shakers folder in plot " .. plotNumber)
+			return
+		end
+	end
+
+	local currentModel = nil
+
+	local function onModelChanged(newModel)
+		if currentModel then
+			print("⚠ Model changing in plot " .. plotNumber .. " - Saving data...")
+			local player = ShakerModel.GetPlayerForPlot(plotNumber)
+			if player then
+				ShakerDataManager.SavePlayerShakerData(player)
+			end
+		end
+
+		currentModel = newModel
+
+		if newModel and newModel:IsA("Model") then
+			print("New model detected in plot " .. plotNumber)
+			task.wait(0.5)
+
+			local realShakersFolder = newModel:FindFirstChild("Shakers")
+			if realShakersFolder then
+				monitorShakersFolder(realShakersFolder, plotNumber)
+
+				local player = ShakerModel.GetPlayerForPlot(plotNumber)
+				if player then
+					task.wait(0.5)
+					print("Restoring data for plot " .. plotNumber)
+					ShakerDataManager.RestorePlayerShakerData(player)
+				end
+			end
+		end
+	end
+
+	plotShakersRoot.ChildAdded:Connect(function(child)
+		if child:IsA("Model") then
+			onModelChanged(child)
+		end
+	end)
+
+	plotShakersRoot.ChildRemoved:Connect(function(child)
+		if child:IsA("Model") and child == currentModel then
+			print("⚠ Model removed from plot " .. plotNumber)
+			local player = ShakerModel.GetPlayerForPlot(plotNumber)
+			if player then
+				ShakerDataManager.SavePlayerShakerData(player)
+			end
+			currentModel = nil
+		end
+	end)
+
+	local modelInside = plotShakersRoot:FindFirstChildWhichIsA("Model")
+	if modelInside then
+		onModelChanged(modelInside)
+	end
+end
+
+-- ============================================================
+-- INICIALIZACIÓN
+-- ============================================================
+
+-- Inicializar cooldowns para jugadores ya conectados
+for _, player in ipairs(Players:GetPlayers()) do
+	playerCooldowns[player.UserId] = tick() + COOLDOWN_TIME
+	print("⏳ Player " .. player.Name .. " has a " .. COOLDOWN_TIME .. "s cooldown before interacting")
+end
+
+for _, plotFolder in ipairs(plotsFolder:GetChildren()) do
+	task.spawn(function()
+		initializePlotShakers(plotFolder)
+	end)
+end
+
+plotsFolder.ChildAdded:Connect(function(plotFolder)
+	task.spawn(function()
+		task.wait(0.5)
+		initializePlotShakers(plotFolder)
+	end)
+end)
+
+print("✓ ShakerProximityPrompts loaded (Modular System with Player Cooldown)")
