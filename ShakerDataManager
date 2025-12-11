@@ -1,0 +1,106 @@
+-- Script: ShakerDataManager.lua
+-- Ubicación: ServerScriptService
+-- NUEVO SCRIPT - Crear este primero
+
+local Players = game:GetService("Players")
+
+-- Almacenamiento temporal de datos de shakers por jugador
+local ShakerDataCache = {}
+
+local ShakerDataManager = {}
+
+function ShakerDataManager.SavePlayerShakerData(player)
+	local playerShakers = player:FindFirstChild("Shakers")
+	if not playerShakers then return end
+
+	local userId = player.UserId
+	ShakerDataCache[userId] = {}
+
+	-- Guardar todos los ingredientes de cada shaker
+	for _, shakerFolder in ipairs(playerShakers:GetChildren()) do
+		if shakerFolder:IsA("Folder") then
+			local shakerNumber = tonumber(shakerFolder.Name)
+			if shakerNumber then
+				ShakerDataCache[userId][shakerNumber] = {}
+
+				for _, ingredientFolder in ipairs(shakerFolder:GetChildren()) do
+					if ingredientFolder:IsA("Folder") then
+						-- Guardar nombre del ingrediente y su Id
+						local idValue = ingredientFolder:FindFirstChild("Id")
+						if idValue and idValue:IsA("IntValue") then
+							table.insert(ShakerDataCache[userId][shakerNumber], {
+								Name = ingredientFolder.Name,
+								Id = idValue.Value
+							})
+						end
+					end
+				end
+			end
+		end
+	end
+
+	print("✓ Saved shaker data for " .. player.Name)
+end
+
+function ShakerDataManager.RestorePlayerShakerData(player)
+	local userId = player.UserId
+	local cachedData = ShakerDataCache[userId]
+
+	if not cachedData then 
+		print("No cached data for " .. player.Name)
+		return 
+	end
+
+	local playerShakers = player:FindFirstChild("Shakers")
+	if not playerShakers then return end
+
+	local inventory = player:FindFirstChild("Inventory")
+	if not inventory then return end
+
+	local ingredients = inventory:FindFirstChild("Ingredients")
+	if not ingredients then return end
+
+	print("Restoring shaker data for " .. player.Name)
+
+	-- Restaurar ingredientes a cada shaker
+	for shakerNumber, ingredientList in pairs(cachedData) do
+		local shakerFolder = playerShakers:FindFirstChild(tostring(shakerNumber))
+		if shakerFolder then
+			for _, ingredientData in ipairs(ingredientList) do
+				-- Buscar el ingrediente en el inventario
+				local found = false
+				for _, ingredientFolder in ipairs(ingredients:GetChildren()) do
+					if ingredientFolder:IsA("Folder") and ingredientFolder.Name == ingredientData.Name then
+						local idValue = ingredientFolder:FindFirstChild("Id")
+						if idValue and idValue:IsA("IntValue") and idValue.Value == ingredientData.Id then
+							-- Mover de vuelta al shaker
+							ingredientFolder.Parent = shakerFolder
+							found = true
+							print("✓ Restored " .. ingredientData.Name .. " to Shaker " .. shakerNumber)
+							break
+						end
+					end
+				end
+
+				if not found then
+					warn("Could not find ingredient " .. ingredientData.Name .. " with Id " .. ingredientData.Id)
+				end
+			end
+		end
+	end
+
+	print("✓ Restoration complete for " .. player.Name)
+end
+
+function ShakerDataManager.ClearPlayerCache(player)
+	local userId = player.UserId
+	ShakerDataCache[userId] = nil
+	print("Cleared cache for " .. player.Name)
+end
+
+-- Limpiar cache cuando el jugador se va
+Players.PlayerRemoving:Connect(function(player)
+	ShakerDataManager.ClearPlayerCache(player)
+end)
+
+return ShakerDataManager
