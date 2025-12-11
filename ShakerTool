@@ -1,0 +1,34 @@
+-- Module: ShakerTool.lua
+-- Ubicación: ReplicatedStorage.Modules.Utils.ShakerLogic
+
+local Players = game:GetService("Players")
+
+local ShakerTool = {}
+
+-- Obtener jugador desde el personaje
+function ShakerTool.GetPlayerFromCharacter(character)
+	return Players:GetPlayerFromCharacter(character)
+end
+
+-- Obtener herramienta equipada
+function ShakerTool.GetEquippedTool(character)
+	return character:FindFirstChildOfClass("Tool")
+end
+
+-- Verificar si una herramienta es un ingrediente
+function ShakerTool.IsIngredientTool(tool)
+	local typeValue = tool:FindFirstChild("Type")
+	if not typeValue or not typeValue:IsA("StringValue") then return false end
+	return typeValue.Value == "Ingredient"
+end
+
+-- Obtener el ID de una herramienta
+function ShakerTool.GetToolId(tool)
+	local idValue = tool:FindFirstChild("Id")
+	if idValue and idValue:IsA("IntValue") then
+		return idValue.Value
+	end
+	return nil
+end
+
+return ShakerTool
