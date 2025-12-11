@@ -1,0 +1,283 @@
+-- Module: ShakerEffects.lua
+-- Ubicación: ReplicatedStorage.Modules.Utils.ShakerLogic
+
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local ShakerEffects = {}
+
+-- Referencias a assets
+local addIngredientSound = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SFX"):WaitForChild("AddIngredient")
+local bubblesSound = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SFX"):WaitForChild("Bubbles")
+local bubblesVFX = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("VFX"):WaitForChild("Shakers"):WaitForChild("Bubbles")
+local pourSFX = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SFX"):WaitForChild("PourSFX")
+local pourVFX = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("VFX"):WaitForChild("Shakers"):WaitForChild("PourVFX")
+
+-- Referencia al sonido de Energizing
+local energizingSound = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SFX"):WaitForChild("Energizing", 5)
+
+---------------------------------------------------------------------
+-- 🔥 Mezclar colores
+---------------------------------------------------------------------
+function ShakerEffects.MixColors(colors)
+	if #colors == 0 then
+		return Color3.fromRGB(255, 255, 255)
+	end
+
+	local r, g, b = 0, 0, 0
+	for _, c in ipairs(colors) do
+		r += c.R
+		g += c.G
+		b += c.B
+	end
+
+	return Color3.new(r / #colors, g / #colors, b / #colors)
+end
+
+---------------------------------------------------------------------
+-- 🔥 Aplicar color a partículas
+---------------------------------------------------------------------
+function ShakerEffects.ApplyColorToParticles(parent, color)
+	for _, child in ipairs(parent:GetDescendants()) do
+		if child:IsA("ParticleEmitter") then
+			child.Color = ColorSequence.new(color)
+		end
+	end
+end
+
+---------------------------------------------------------------------
+-- 🔥 Obtener colores de ingredientes
+---------------------------------------------------------------------
+function ShakerEffects.GetIngredientColors(ingredientFolders, ingredientConfig)
+	local colors = {}
+
+	for _, folder in ipairs(ingredientFolders) do
+		local data = ingredientConfig.Ingredients[folder.Name]
+		if data and data.Color then
+			table.insert(colors, data.Color)
+		end
+	end
+
+	return colors
+end
+
+---------------------------------------------------------------------
+-- 🔥 Limpiar TODOS los sonidos de AddIngredient
+---------------------------------------------------------------------
+local function cleanupAddIngredientSounds(contentPart)
+	if not contentPart then return end
+
+	for _, child in ipairs(contentPart:GetChildren()) do
+		if child:IsA("Sound") and child.Name == "AddIngredient" then
+			child:Stop()
+			child:Destroy()
+		end
+	end
+end
+
+---------------------------------------------------------------------
+-- 🔥 Sonido de añadir ingrediente (ARREGLADO)
+---------------------------------------------------------------------
+function ShakerEffects.PlayAddIngredientSound(contentPart)
+	if not contentPart or not contentPart:IsA("BasePart") then return end
+
+	-- PRIMERO limpiar cualquier sonido anterior
+	cleanupAddIngredientSounds(contentPart)
+
+	-- LUEGO crear el nuevo sonido
+	local s = addIngredientSound:Clone()
+	s.Parent = contentPart
+	s:Play()
+
+	s.Ended:Connect(function()
+		s:Destroy()
+	end)
+end
+
+---------------------------------------------------------------------
+-- ⚡ Limpiar sonidos de Energizing
+---------------------------------------------------------------------
+local function cleanupEnergizingSounds(contentPart)
+	if not contentPart then return end
+
+	for _, child in ipairs(contentPart:GetChildren()) do
+		if child:IsA("Sound") and child.Name == "Energizing" then
+			child:Stop()
+			child:Destroy()
+		end
+	end
+end
+
+---------------------------------------------------------------------
+-- ⚡ Sonido de Energizing (ARREGLADO)
+---------------------------------------------------------------------
+function ShakerEffects.PlayEnergizingSound(contentPart)
+	if not contentPart or not contentPart:IsA("BasePart") then return end
+
+	-- Limpiar sonidos anteriores
+	cleanupEnergizingSounds(contentPart)
+
+	-- Si no existe el sonido de Energizing, usar un sonido alternativo
+	if not energizingSound then
+		print("⚡ Energizing sound not found - using fallback")
+		cleanupAddIngredientSounds(contentPart)
+
+		local s = addIngredientSound:Clone()
+		s.PlaybackSpeed = 1.5
+		s.Parent = contentPart
+		s:Play()
+		s.Ended:Connect(function()
+			s:Destroy()
+		end)
+		return
+	end
+
+	local s = energizingSound:Clone()
+	s.Parent = contentPart
+	s:Play()
+
+	s.Ended:Connect(function()
+		s:Destroy()
+	end)
+end
+
+---------------------------------------------------------------------
+-- 🔥 Limpiar efectos de burbujas anteriores
+---------------------------------------------------------------------
+local function cleanupBubbleEffects(contentPart)
+	if not contentPart then return end
+
+	for _, child in ipairs(contentPart:GetChildren()) do
+		-- Eliminar ParticleEmitters de burbujas (water1, water2, etc.)
+		if child:IsA("ParticleEmitter") then
+			child:Destroy()
+		end
+		-- Eliminar sonidos de burbujas
+		if child:IsA("Sound") and child.Name == "Bubbles" then
+			child:Stop()
+			child:Destroy()
+		end
+	end
+end
+
+---------------------------------------------------------------------
+-- 🔥 Start Shake Effects
+---------------------------------------------------------------------
+function ShakerEffects.StartShakeEffects(shakerModel, mixedColor)
+	local juicesFolder = shakerModel:FindFirstChild("Juices")
+	if not juicesFolder then return end
+
+	local contentPart = juicesFolder:FindFirstChild("Content")
+	if not contentPart then return end
+
+	-- Limpiar TODOS los efectos anteriores
+	cleanupAddIngredientSounds(contentPart)
+	cleanupEnergizingSounds(contentPart)
+	cleanupBubbleEffects(contentPart)
+
+	-- DEBUG: Ver cuántos hijos tiene Content ANTES
+	print("🔍 Content children BEFORE adding effects:", #contentPart:GetChildren())
+
+	-- Sonido de burbujas
+	local soundClone = bubblesSound:Clone()
+	soundClone.Parent = contentPart
+	soundClone.Looped = true
+	soundClone:Play()
+
+	-- VFX de burbujas - clonar cada ParticleEmitter individualmente
+	print("🔍 BubblesVFX has", #bubblesVFX:GetChildren(), "children")
+	for _, effect in ipairs(bubblesVFX:GetChildren()) do
+		if effect:IsA("ParticleEmitter") then
+			print("  - Cloning ParticleEmitter:", effect.Name)
+			local emitterClone = effect:Clone()
+			emitterClone.Color = ColorSequence.new(mixedColor)
+			emitterClone.Parent = contentPart
+		end
+	end
+
+	-- DEBUG: Ver cuántos hijos tiene Content DESPUÉS
+	print("🔍 Content children AFTER adding effects:", #contentPart:GetChildren())
+	for _, child in ipairs(contentPart:GetChildren()) do
+		print("  -", child.ClassName, child.Name)
+	end
+
+	return soundClone, contentPart
+end
+
+---------------------------------------------------------------------
+-- 🔥 Stop Shake Effects
+---------------------------------------------------------------------
+function ShakerEffects.StopShakeEffects(soundClone, contentPart)
+	-- Detener y eliminar sonido de burbujas
+	if soundClone then
+		soundClone:Stop()
+		soundClone:Destroy()
+	end
+
+	-- Limpiar TODO: VFX, sonidos y efectos
+	if contentPart then
+		cleanupAddIngredientSounds(contentPart)
+		cleanupEnergizingSounds(contentPart)
+		cleanupBubbleEffects(contentPart)
+	end
+end
+
+---------------------------------------------------------------------
+-- 🔥 Pour Effect
+---------------------------------------------------------------------
+function ShakerEffects.PlayPourEffect(shakerModel, mixedColor)
+	local pourPart = shakerModel:FindFirstChild("Pour")
+	if not pourPart then return end
+
+	local pourVFXClone = pourVFX:Clone()
+	pourVFXClone.CFrame = pourPart.CFrame
+	pourVFXClone.Parent = shakerModel
+
+	ShakerEffects.ApplyColorToParticles(pourVFXClone, mixedColor)
+
+	local pourSound = pourSFX:Clone()
+	pourSound.Parent = pourPart
+	pourSound:Play()
+
+	local particles = {}
+	for _, d in ipairs(pourVFXClone:GetDescendants()) do
+		if d:IsA("ParticleEmitter") then
+			table.insert(particles, d)
+			d:Emit(d:GetAttribute("EmitCount") or 20)
+		end
+	end
+
+	local conn
+	conn = RunService.Heartbeat:Connect(function()
+		if pourSound.IsPlaying then
+			for _, p in ipairs(particles) do
+				if p.Parent then p:Emit(2) end
+			end
+		else
+			conn:Disconnect()
+		end
+	end)
+
+	pourSound.Ended:Connect(function()
+		if conn then conn:Disconnect() end
+		task.wait(2)
+		pourVFXClone:Destroy()
+		pourSound:Destroy()
+	end)
+end
+
+---------------------------------------------------------------------
+-- 🔥 Botón start color
+---------------------------------------------------------------------
+function ShakerEffects.SetStartButtonColor(shakerModel, isActive)
+	local startPart = shakerModel:FindFirstChild("Start")
+	if not startPart then return end
+
+	if isActive then
+		startPart.Color = Color3.fromRGB(255, 0, 0)
+	else
+		startPart.Color = Color3.fromRGB(0, 255, 0)
+	end
+end
+
+return ShakerEffects
