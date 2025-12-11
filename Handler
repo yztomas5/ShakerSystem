@@ -156,17 +156,9 @@ local function updateAddRemovePrompt(prompt, player, shakerNumber)
 		if toolId then
 			local ingredientFolder = ShakerInventory.FindIngredientInPlayerInventory(player, tool.Name, toolId)
 			if ingredientFolder then
-				-- Verificar que el inventario no esté lleno
-				local hasSpace, errorMsg = checkInventorySpace(player)
-				if hasSpace then
-					prompt.ActionText = "Add (" .. ingredientCount .. "/" .. MAX_INGREDIENTS .. ")"
-					prompt.Enabled = true
-					return
-				else
-					-- Inventario lleno, deshabilitar prompt
-					prompt.Enabled = false
-					return
-				end
+				prompt.ActionText = "Add (" .. ingredientCount .. "/" .. MAX_INGREDIENTS .. ")"
+				prompt.Enabled = true
+				return
 			end
 		end
 	end
