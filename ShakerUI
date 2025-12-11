@@ -1,0 +1,39 @@
+-- Module: ShakerUI.lua
+-- Ubicación: ReplicatedStorage.Modules.Utils.ShakerLogic
+
+local ShakerUI = {}
+
+-- Formatear tiempo en formato HH:MM:SS o MM:SS
+function ShakerUI.FormatTime(seconds)
+	local hours = math.floor(seconds / 3600)
+	local minutes = math.floor((seconds % 3600) / 60)
+	local secs = seconds % 60
+
+	if hours > 0 then
+		return string.format("%02d:%02d:%02d", hours, minutes, secs)
+	else
+		return string.format("%02d:%02d", minutes, secs)
+	end
+end
+
+-- Actualizar display de status (temporizador)
+function ShakerUI.UpdateStatusDisplay(shakerModel, timeRemaining, isShaking)
+	local display = shakerModel:FindFirstChild("Display")
+	if not display or not display:IsA("BasePart") then return end
+
+	local infoGui = display:FindFirstChild("InfoGui")
+	if not infoGui then return end
+
+	local status = infoGui:FindFirstChild("Status")
+	if not status then return end
+
+	if isShaking and timeRemaining then
+		status.Visible = true
+		status.Text = ShakerUI.FormatTime(timeRemaining)
+	else
+		status.Visible = false
+		status.Text = ""
+	end
+end
+
+return ShakerUI
