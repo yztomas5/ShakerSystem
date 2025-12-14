@@ -13,8 +13,10 @@ local bubblesVFX = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("VFX"):
 local pourSFX = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SFX"):WaitForChild("PourSFX")
 local pourVFX = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("VFX"):WaitForChild("Shakers"):WaitForChild("PourVFX")
 
--- Referencia al sonido de Energizing
+-- Referencias a los sonidos de Energizing
 local energizingSound = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SFX"):WaitForChild("Energizing", 5)
+local midEnergizingSound = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SFX"):WaitForChild("MidEnergizing", 5)
+local bigEnergizingSound = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Sounds"):WaitForChild("SFX"):WaitForChild("BigEnergizing", 5)
 
 ---------------------------------------------------------------------
 -- 🔥 Mezclar colores
@@ -95,13 +97,13 @@ function ShakerEffects.PlayAddIngredientSound(contentPart)
 end
 
 ---------------------------------------------------------------------
--- ⚡ Limpiar sonidos de Energizing
+-- ⚡ Limpiar sonidos de Energizing (todos los tipos)
 ---------------------------------------------------------------------
 local function cleanupEnergizingSounds(contentPart)
 	if not contentPart then return end
 
 	for _, child in ipairs(contentPart:GetChildren()) do
-		if child:IsA("Sound") and child.Name == "Energizing" then
+		if child:IsA("Sound") and (child.Name == "Energizing" or child.Name == "MidEnergizing" or child.Name == "BigEnergizing") then
 			child:Stop()
 			child:Destroy()
 		end
@@ -133,6 +135,72 @@ function ShakerEffects.PlayEnergizingSound(contentPart)
 	end
 
 	local s = energizingSound:Clone()
+	s.Parent = contentPart
+	s:Play()
+
+	s.Ended:Connect(function()
+		s:Destroy()
+	end)
+end
+
+---------------------------------------------------------------------
+-- ⚡ Sonido de Mid Energizing
+---------------------------------------------------------------------
+function ShakerEffects.PlayMidEnergizingSound(contentPart)
+	if not contentPart or not contentPart:IsA("BasePart") then return end
+
+	-- Limpiar sonidos anteriores
+	cleanupEnergizingSounds(contentPart)
+
+	-- Si no existe el sonido de Mid Energizing, usar fallback
+	if not midEnergizingSound then
+		print("⚡ Mid Energizing sound not found - using fallback")
+		cleanupAddIngredientSounds(contentPart)
+
+		local s = addIngredientSound:Clone()
+		s.PlaybackSpeed = 1.75
+		s.Parent = contentPart
+		s:Play()
+		s.Ended:Connect(function()
+			s:Destroy()
+		end)
+		return
+	end
+
+	local s = midEnergizingSound:Clone()
+	s.Parent = contentPart
+	s:Play()
+
+	s.Ended:Connect(function()
+		s:Destroy()
+	end)
+end
+
+---------------------------------------------------------------------
+-- ⚡ Sonido de Big Energizing
+---------------------------------------------------------------------
+function ShakerEffects.PlayBigEnergizingSound(contentPart)
+	if not contentPart or not contentPart:IsA("BasePart") then return end
+
+	-- Limpiar sonidos anteriores
+	cleanupEnergizingSounds(contentPart)
+
+	-- Si no existe el sonido de Big Energizing, usar fallback
+	if not bigEnergizingSound then
+		print("⚡ Big Energizing sound not found - using fallback")
+		cleanupAddIngredientSounds(contentPart)
+
+		local s = addIngredientSound:Clone()
+		s.PlaybackSpeed = 2.0
+		s.Parent = contentPart
+		s:Play()
+		s.Ended:Connect(function()
+			s:Destroy()
+		end)
+		return
+	end
+
+	local s = bigEnergizingSound:Clone()
 	s.Parent = contentPart
 	s:Play()
 
