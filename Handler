@@ -131,15 +131,18 @@ local function updateAddRemovePrompt(prompt, player, shakerNumber)
 	local ingredientCount = ShakerInventory.CountIngredients(player, shakerNumber)
 	local isShakeActive = ShakerManager.IsShakeActive(player, shakerNumber)
 
-	-- Si hay un shake activo Y tiene Energizing equipado
-	if isShakeActive and tool and tool.Name == "Energizing" then
-		local toolId = ShakerTool.GetToolId(tool)
-		if toolId then
-			local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, "Energizing", toolId)
-			if energizingFolder then
-				prompt.ActionText = "Add Energizing"
-				prompt.Enabled = true
-				return
+	-- Si hay un shake activo Y tiene Energizing (o variantes) equipado
+	if isShakeActive and tool then
+		local toolName = tool.Name
+		if toolName == "Energizing" or toolName == "Mid Energizing" or toolName == "Big Energizing" then
+			local toolId = ShakerTool.GetToolId(tool)
+			if toolId then
+				local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, toolName, toolId)
+				if energizingFolder then
+					prompt.ActionText = "Add " .. toolName
+					prompt.Enabled = true
+					return
+				end
 			end
 		end
 	end
@@ -218,33 +221,54 @@ local function handleAddRemove(player, shakerNumber, plotNumber)
 	local tool = ShakerTool.GetEquippedTool(character)
 	local isShakeActive = ShakerManager.IsShakeActive(player, shakerNumber)
 
-	-- CASO ESPECIAL: Si hay shake activo Y tiene Energizing
-	if isShakeActive and tool and tool.Name == "Energizing" then
-		local toolId = ShakerTool.GetToolId(tool)
-		if not toolId then return end
+	-- CASO ESPECIAL: Si hay shake activo Y tiene Energizing (o variantes)
+	if isShakeActive and tool then
+		local toolName = tool.Name
+		local reductionPercentage = nil
 
-		local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, "Energizing", toolId)
-		if energizingFolder then
-			-- Destruir tool y folder
-			tool:Destroy()
-			energizingFolder:Destroy()
-			task.wait(0.1)
-
-			-- Reducir tiempo en 25%
-			ShakerManager.ReduceShakeTime(player, shakerNumber, 0.25)
-
-			-- Reproducir sonido
-			local shakerModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
-			if shakerModel then
-				local contentPart = ShakerModel.GetContentPart(shakerModel)
-				if contentPart then
-					ShakerEffects.PlayEnergizingSound(contentPart)
-				end
-			end
-
-			print("⚡ Energizing added to Shaker " .. shakerNumber .. " - Time reduced by 25%")
+		-- Determinar porcentaje de reducción según el tipo
+		if toolName == "Energizing" then
+			reductionPercentage = 0.25  -- 25%
+		elseif toolName == "Mid Energizing" then
+			reductionPercentage = 0.50  -- 50%
+		elseif toolName == "Big Energizing" then
+			reductionPercentage = 1.00  -- 100%
 		end
-		return
+
+		if reductionPercentage then
+			local toolId = ShakerTool.GetToolId(tool)
+			if not toolId then return end
+
+			local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, toolName, toolId)
+			if energizingFolder then
+				-- Destruir tool y folder
+				tool:Destroy()
+				energizingFolder:Destroy()
+				task.wait(0.1)
+
+				-- Reducir tiempo según porcentaje
+				ShakerManager.ReduceShakeTime(player, shakerNumber, reductionPercentage)
+
+				-- Reproducir sonido apropiado
+				local shakerModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+				if shakerModel then
+					local contentPart = ShakerModel.GetContentPart(shakerModel)
+					if contentPart then
+						if toolName == "Energizing" then
+							ShakerEffects.PlayEnergizingSound(contentPart)
+						elseif toolName == "Mid Energizing" then
+							ShakerEffects.PlayMidEnergizingSound(contentPart)
+						elseif toolName == "Big Energizing" then
+							ShakerEffects.PlayBigEnergizingSound(contentPart)
+						end
+					end
+				end
+
+				local percentText = math.floor(reductionPercentage * 100)
+				print("⚡ " .. toolName .. " added to Shaker " .. shakerNumber .. " - Time reduced by " .. percentText .. "%")
+			end
+			return
+		end
 	end
 
 	-- Si hay shake activo sin Energizing, no hacer nada
