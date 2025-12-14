@@ -17,7 +17,11 @@ local ShakerModel = require(ShakerLogic:WaitForChild("ShakerModel"))
 local ShakerDataManager = require(script.Parent.ShakerDataManager)
 
 local plotsFolder = Workspace:WaitForChild("Plots")
+local warningEvent = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("Warn"):WaitForChild("Warning")
 local MAX_INGREDIENTS = 3
+
+-- Colores para warnings
+local COLOR_ERROR = Color3.fromRGB(255, 0, 0)
 
 -- ============================================================
 -- SISTEMA DE COOLDOWN PARA JUGADORES
@@ -57,6 +61,56 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 -- ============================================================
+-- VERIFICACIÓN DE INVENTARIO
+-- ============================================================
+
+-- Verificar si el inventario de Juices o Ingredients está lleno
+local function checkInventorySpace(player)
+	local dataFolder = player:FindFirstChild("Data")
+	if not dataFolder then return true, "" end
+
+	local storageValue = dataFolder:FindFirstChild("Storage")
+	if not storageValue or not storageValue:IsA("IntValue") then return true, "" end
+
+	local inventory = player:FindFirstChild("Inventory")
+	if not inventory then return true, "" end
+
+	-- Verificar Juices
+	local juicesFolder = inventory:FindFirstChild("Juices")
+	if juicesFolder then
+		local juiceCount = 0
+		for _, child in ipairs(juicesFolder:GetChildren()) do
+			if child:IsA("Folder") then
+				juiceCount = juiceCount + 1
+			end
+		end
+
+		if juiceCount >= storageValue.Value then
+			local msg = "Juice inventory is full (" .. juiceCount .. "/" .. storageValue.Value .. ")"
+			return false, msg
+		end
+	end
+
+	-- Verificar Ingredients
+	local ingredientsFolder = inventory:FindFirstChild("Ingredients")
+	if ingredientsFolder then
+		local ingredientCount = 0
+		for _, child in ipairs(ingredientsFolder:GetChildren()) do
+			if child:IsA("Folder") then
+				ingredientCount = ingredientCount + 1
+			end
+		end
+
+		if ingredientCount >= storageValue.Value then
+			local msg = "Ingredient inventory is full (" .. ingredientCount .. "/" .. storageValue.Value .. ")"
+			return false, msg
+		end
+	end
+
+	return true, ""
+end
+
+-- ============================================================
 -- ACTUALIZACIÓN DE PROMPTS
 -- ============================================================
 
@@ -78,17 +132,14 @@ local function updateAddRemovePrompt(prompt, player, shakerNumber)
 	local isShakeActive = ShakerManager.IsShakeActive(player, shakerNumber)
 
 	-- Si hay un shake activo Y tiene Energizing equipado
-	if isShakeActive and tool then
-		local toolName = tool.Name
-		if toolName == "Energizing" or toolName == "Mid Energizing" or toolName == "Big Energizing" then
-			local toolId = ShakerTool.GetToolId(tool)
-			if toolId then
-				local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, toolName, toolId)
-				if energizingFolder then
-					prompt.ActionText = "Add " .. toolName
-					prompt.Enabled = true
-					return
-				end
+	if isShakeActive and tool and tool.Name == "Energizing" then
+		local toolId = ShakerTool.GetToolId(tool)
+		if toolId then
+			local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, "Energizing", toolId)
+			if energizingFolder then
+				prompt.ActionText = "Add Energizing"
+				prompt.Enabled = true
+				return
 			end
 		end
 	end
@@ -167,54 +218,33 @@ local function handleAddRemove(player, shakerNumber, plotNumber)
 	local tool = ShakerTool.GetEquippedTool(character)
 	local isShakeActive = ShakerManager.IsShakeActive(player, shakerNumber)
 
-	-- CASO ESPECIAL: Si hay shake activo Y tiene Energizing (o variantes)
-	if isShakeActive and tool then
-		local toolName = tool.Name
-		local reductionPercentage = nil
+	-- CASO ESPECIAL: Si hay shake activo Y tiene Energizing
+	if isShakeActive and tool and tool.Name == "Energizing" then
+		local toolId = ShakerTool.GetToolId(tool)
+		if not toolId then return end
 
-		-- Determinar porcentaje de reducción según el tipo
-		if toolName == "Energizing" then
-			reductionPercentage = 0.25  -- 25%
-		elseif toolName == "Mid Energizing" then
-			reductionPercentage = 0.50  -- 50%
-		elseif toolName == "Big Energizing" then
-			reductionPercentage = 1.00  -- 100%
-		end
+		local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, "Energizing", toolId)
+		if energizingFolder then
+			-- Destruir tool y folder
+			tool:Destroy()
+			energizingFolder:Destroy()
+			task.wait(0.1)
 
-		if reductionPercentage then
-			local toolId = ShakerTool.GetToolId(tool)
-			if not toolId then return end
+			-- Reducir tiempo en 25%
+			ShakerManager.ReduceShakeTime(player, shakerNumber, 0.25)
 
-			local energizingFolder = ShakerInventory.FindGearInPlayerInventory(player, toolName, toolId)
-			if energizingFolder then
-				-- Destruir tool y folder
-				tool:Destroy()
-				energizingFolder:Destroy()
-				task.wait(0.1)
-
-				-- Reducir tiempo según porcentaje
-				ShakerManager.ReduceShakeTime(player, shakerNumber, reductionPercentage)
-
-				-- Reproducir sonido apropiado
-				local shakerModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
-				if shakerModel then
-					local contentPart = ShakerModel.GetContentPart(shakerModel)
-					if contentPart then
-						if toolName == "Energizing" then
-							ShakerEffects.PlayEnergizingSound(contentPart)
-						elseif toolName == "Mid Energizing" then
-							ShakerEffects.PlayMidEnergizingSound(contentPart)
-						elseif toolName == "Big Energizing" then
-							ShakerEffects.PlayBigEnergizingSound(contentPart)
-						end
-					end
+			-- Reproducir sonido
+			local shakerModel = ShakerModel.GetCurrentShakerModel(player, shakerNumber)
+			if shakerModel then
+				local contentPart = ShakerModel.GetContentPart(shakerModel)
+				if contentPart then
+					ShakerEffects.PlayEnergizingSound(contentPart)
 				end
-
-				local percentText = math.floor(reductionPercentage * 100)
-				print("⚡ " .. toolName .. " added to Shaker " .. shakerNumber .. " - Time reduced by " .. percentText .. "%")
 			end
-			return
+
+			print("⚡ Energizing added to Shaker " .. shakerNumber .. " - Time reduced by 25%")
 		end
+		return
 	end
 
 	-- Si hay shake activo sin Energizing, no hacer nada
@@ -229,6 +259,13 @@ local function handleAddRemove(player, shakerNumber, plotNumber)
 		and ingredientCount < MAX_INGREDIENTS
 
 	if shouldAdd then
+		-- Verificar espacio en inventario ANTES de añadir
+		local hasSpace, errorMsg = checkInventorySpace(player)
+		if not hasSpace then
+			warningEvent:FireClient(player, errorMsg, COLOR_ERROR)
+			return
+		end
+
 		-- Lógica de AÑADIR
 		local toolId = ShakerTool.GetToolId(tool)
 		if not toolId then return end
