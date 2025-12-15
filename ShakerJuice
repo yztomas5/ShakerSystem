@@ -68,23 +68,30 @@ function ShakerJuice.DetermineJuiceModel(sortedIngredients)
 	end
 end
 
--- Generar nombre único para el jugo (evitar duplicados)
-function ShakerJuice.GenerateUniqueJuiceName(juicesFolder, baseName)
-	-- Si no existe ningún folder con ese nombre, usar el nombre base
-	if not juicesFolder:FindFirstChild(baseName) then
-		return baseName
+-- Generar ID único para el jugo
+function ShakerJuice.GenerateUniqueJuiceId(juicesFolder)
+	local baseId = tick() * 1000 -- Usar timestamp en milisegundos como base
+	local juiceId = math.floor(baseId)
+
+	-- Verificar que no exista ya un jugo con este ID
+	while ShakerJuice.JuiceExistsWithId(juicesFolder, juiceId) do
+		juiceId = juiceId + 1
 	end
 
-	-- Si existe, buscar un sufijo numérico disponible
-	local counter = 2
-	local uniqueName = baseName .. " (" .. counter .. ")"
+	return juiceId
+end
 
-	while juicesFolder:FindFirstChild(uniqueName) do
-		counter = counter + 1
-		uniqueName = baseName .. " (" .. counter .. ")"
+-- Verificar si existe un jugo con el ID especificado
+function ShakerJuice.JuiceExistsWithId(juicesFolder, targetId)
+	for _, juiceFolder in ipairs(juicesFolder:GetChildren()) do
+		if juiceFolder:IsA("Folder") then
+			local idValue = juiceFolder:FindFirstChild("Id")
+			if idValue and idValue:IsA("IntValue") and idValue.Value == targetId then
+				return true
+			end
+		end
 	end
-
-	return uniqueName
+	return false
 end
 
 -- Crear jugo desde ingredientes del shaker
@@ -137,20 +144,26 @@ function ShakerJuice.CreateJuice(player, shakerNumber, ingredientFolders, ingred
 	local juiceQuality = ShakerJuice.DetermineJuiceQuality(qualities)
 	local juiceModel = ShakerJuice.DetermineJuiceModel(ingredientsData)
 
-	-- Construir nombre base del jugo
+	-- Construir nombre del jugo
 	local pronouns = {}
 	for _, data in ipairs(ingredientsData) do
 		table.insert(pronouns, data.pronoun)
 	end
-	local baseJuiceName = juiceModel .. " " .. table.concat(pronouns, " ")
+	local juiceName = juiceModel .. " " .. table.concat(pronouns, " ")
 
-	-- Generar nombre único para evitar duplicados
-	local juiceName = ShakerJuice.GenerateUniqueJuiceName(juicesFolder, baseJuiceName)
+	-- Generar ID único para evitar duplicados
+	local juiceId = ShakerJuice.GenerateUniqueJuiceId(juicesFolder)
 
 	-- Crear folder del jugo
 	local juiceFolder = Instance.new("Folder")
 	juiceFolder.Name = juiceName
 	juiceFolder.Parent = juicesFolder
+
+	-- Crear ID único
+	local idValue = Instance.new("IntValue")
+	idValue.Name = "Id"
+	idValue.Value = juiceId
+	idValue.Parent = juiceFolder
 
 	-- Crear propiedades
 	local qualityValue = Instance.new("StringValue")
@@ -193,7 +206,7 @@ function ShakerJuice.CreateJuice(player, shakerNumber, ingredientFolders, ingred
 		folder.Parent = ingredientsContainer
 	end
 
-	print("✅ Juice created: " .. juiceName .. " | Quality: " .. juiceQuality .. " | Model: " .. juiceModel)
+	print("✅ Juice created: " .. juiceName .. " | ID: " .. juiceId .. " | Quality: " .. juiceQuality .. " | Model: " .. juiceModel)
 	return true
 end
 
