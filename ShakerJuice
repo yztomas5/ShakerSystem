@@ -3,6 +3,9 @@
 
 local ShakerJuice = {}
 
+-- Tabla para prevenir creación simultánea de jugos
+local creatingJuice = {}
+
 -- Calcular PricePerSec con mutaciones
 function ShakerJuice.CalculateIngredientPPS(ingredientFolder, ingredientData, mutationConfig)
 	local basePPS = ingredientData.PricePerSec
@@ -68,36 +71,23 @@ function ShakerJuice.DetermineJuiceModel(sortedIngredients)
 	end
 end
 
--- Generar ID único para el jugo
-function ShakerJuice.GenerateUniqueJuiceId(juicesFolder)
-	local baseId = tick() * 1000 -- Usar timestamp en milisegundos como base
-	local juiceId = math.floor(baseId)
-
-	-- Verificar que no exista ya un jugo con este ID
-	while ShakerJuice.JuiceExistsWithId(juicesFolder, juiceId) do
-		juiceId = juiceId + 1
-	end
-
-	return juiceId
-end
-
--- Verificar si existe un jugo con el ID especificado
-function ShakerJuice.JuiceExistsWithId(juicesFolder, targetId)
-	for _, juiceFolder in ipairs(juicesFolder:GetChildren()) do
-		if juiceFolder:IsA("Folder") then
-			local idValue = juiceFolder:FindFirstChild("Id")
-			if idValue and idValue:IsA("IntValue") and idValue.Value == targetId then
-				return true
-			end
-		end
-	end
-	return false
-end
-
 -- Crear jugo desde ingredientes del shaker
 function ShakerJuice.CreateJuice(player, shakerNumber, ingredientFolders, ingredientConfig, mutationConfig)
+	local juiceKey = player.UserId .. "_" .. shakerNumber
+
+	-- Prevenir creación simultánea de jugos
+	if creatingJuice[juiceKey] then
+		warn("⚠ Juice creation already in progress for " .. juiceKey)
+		return false
+	end
+
+	creatingJuice[juiceKey] = true
+
 	local inventory = player:FindFirstChild("Inventory")
-	if not inventory then return false end
+	if not inventory then
+		creatingJuice[juiceKey] = nil
+		return false
+	end
 
 	local juicesFolder = inventory:FindFirstChild("Juices")
 	if not juicesFolder then
@@ -106,7 +96,10 @@ function ShakerJuice.CreateJuice(player, shakerNumber, ingredientFolders, ingred
 		juicesFolder.Parent = inventory
 	end
 
-	if #ingredientFolders == 0 then return false end
+	if #ingredientFolders == 0 then
+		creatingJuice[juiceKey] = nil
+		return false
+	end
 
 	-- Procesar información de ingredientes
 	local ingredientsData = {}
@@ -151,19 +144,10 @@ function ShakerJuice.CreateJuice(player, shakerNumber, ingredientFolders, ingred
 	end
 	local juiceName = juiceModel .. " " .. table.concat(pronouns, " ")
 
-	-- Generar ID único para evitar duplicados
-	local juiceId = ShakerJuice.GenerateUniqueJuiceId(juicesFolder)
-
 	-- Crear folder del jugo
 	local juiceFolder = Instance.new("Folder")
 	juiceFolder.Name = juiceName
 	juiceFolder.Parent = juicesFolder
-
-	-- Crear ID único
-	local idValue = Instance.new("IntValue")
-	idValue.Name = "Id"
-	idValue.Value = juiceId
-	idValue.Parent = juiceFolder
 
 	-- Crear propiedades
 	local qualityValue = Instance.new("StringValue")
@@ -206,7 +190,11 @@ function ShakerJuice.CreateJuice(player, shakerNumber, ingredientFolders, ingred
 		folder.Parent = ingredientsContainer
 	end
 
-	print("✅ Juice created: " .. juiceName .. " | ID: " .. juiceId .. " | Quality: " .. juiceQuality .. " | Model: " .. juiceModel)
+	print("✅ Juice created: " .. juiceName .. " | Quality: " .. juiceQuality .. " | Model: " .. juiceModel)
+
+	-- Limpiar flag de creación
+	creatingJuice[juiceKey] = nil
+
 	return true
 end
 
